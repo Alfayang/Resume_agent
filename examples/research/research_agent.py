@@ -2,21 +2,27 @@
 import os
 import sys
 import json
+import uuid
+import time
+import random
+import logging
 import uvicorn
-from fastapi import FastAPI
+from typing import Any, List, Dict, Optional
+
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
-# 让 Python 找到 src/deepagents
+# 让 python 找到 src/deepagents
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-# 导入工厂
+# 创建 Agent 的工厂
 try:
     from deepagents import create_deep_agent
 except Exception:
-    from deepagents.agent_factory import create_deep_agent  # noqa
+    from deepagents.agent_factory import create_deep_agent
 
-# 导入工具（都在 src/deepagents/tools 下）
+# 你的工具（按你的实际路径）
 from deepagents.tools.text_parse_tool import parse_resume_text_tool
 from deepagents.tools.rewrite_tool import rewrite_text_tool
 from deepagents.tools.expand_tool import expand_text_tool
@@ -25,6 +31,9 @@ from deepagents.tools.evaluate_resume_tool import evaluate_resume_tool
 from deepagents.tools.generate_statement_tool import generate_statement_tool
 from deepagents.tools.generate_recommend_tool import generate_recommendation_tool
 from deepagents.tools.document_name_tool import name_document_tool
+
+# 最简单文件记忆
+from deepagents.simple_file_memory import save_memory, load_memory, clear_memory
 
 # 子代理
 doc_writer_subagent = {
@@ -55,7 +64,7 @@ doc_writer_subagent = {
     ],
 }
 
-# 主 Agent 提示：要求通过 task 委派给 doc-writer
+# 主 Agent Prompt
 main_prompt = """
 你是编排代理（orchestration agent）。
 当接到用户的文书/简历类请求时，请优先调用 `task` 工具，将任务委派给子代理 `doc-writer`，
@@ -68,7 +77,7 @@ main_prompt = """
 最终响应只包含最终结果，不要附加解释与过程。
 """
 
-# 创建主 Agent：只暴露 task（不让主 Agent 直接调用任何文书工具）
+# 创建主 Agent：只暴露 task
 agent = create_deep_agent(
     tools=[
         parse_resume_text_tool,
@@ -82,7 +91,7 @@ agent = create_deep_agent(
     ],
     instructions=main_prompt,
     subagents=[doc_writer_subagent],
-    expose_tools_to_main=False,   # ⭐ 主 Agent 只能看到 task
+    expose_tools_to_main=False,  # 主 Agent 只看到 task，业务工具走子代理
 )
 
 # FastAPI
@@ -95,8 +104,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | pid=%(process)d | %(levelname)s | %(message)s")
+
 class Question(BaseModel):
     user_input: str
+    session_id: Optional[str] = None
 
 def _pick_output(result):
     if isinstance(result, dict):
@@ -122,17 +134,92 @@ def _pick_output(result):
             return content
     return str(result)
 
+# 重试/回退
+RETRY_ATTEMPTS = int(os.getenv("AGENT_RETRY_ATTEMPTS", "3"))
+RETRY_BASE     = float(os.getenv("AGENT_RETRY_BASE", "0.6"))
+RETRY_JITTER   = float(os.getenv("AGENT_RETRY_JITTER", "0.3"))
+
+def _sleep_backoff(i: int):
+    delay = RETRY_BASE * (2 ** i) + random.uniform(0, RETRY_JITTER)
+    time.sleep(delay)
+
+def invoke_agent_with_retry(messages: List[Dict[str, str]]):
+    last_err = None
+    for i in range(RETRY_ATTEMPTS):
+        try:
+            return agent.invoke({"messages": messages})
+        except Exception as e:
+            last_err = e
+            _sleep_backoff(i)
+    last_user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+    return {"rewritten_text": last_user}
+
+# 主接口：文件记忆 + 重试/回退
 @app.post("/generate")
-async def generate_report(question: Question):
-    result = agent.invoke({"messages": [{"role": "user", "content": question.user_input}]})
+async def generate_report(q: Question, x_session_id: Optional[str] = Header(default=None)):
+    trace_id = str(uuid.uuid4())
+    session_id = x_session_id or q.session_id or str(uuid.uuid4())
+
+    last_n = int(os.getenv("MEMORY_LOAD_LAST_N", "8"))
+    history = load_memory(session_id, last_n=last_n)
+
+    messages: List[Dict[str, str]] = []
+    for h in history:
+        messages.append({"role": h.get("role") or "user", "content": h.get("content") or ""})
+    messages.append({"role": "user", "content": q.user_input})
+
+    result = invoke_agent_with_retry(messages)
+
     output = _pick_output(result)
     if isinstance(output, (dict, list)):
         output = json.dumps(output, ensure_ascii=False, indent=2, default=str)
-    return {"rewritten_letter": output}
 
+    try:
+        save_memory(session_id, "user", q.user_input)
+        save_memory(session_id, "assistant", output)
+    except Exception:
+        pass
+
+    return {"trace_id": trace_id, "session_id": session_id, "rewritten_letter": output}
+
+# 查看调用链路
+@app.post("/debug")
+async def debug_report(q: Question, x_session_id: Optional[str] = Header(default=None)):
+    session_id = x_session_id or q.session_id or str(uuid.uuid4())
+    history = load_memory(session_id, last_n=int(os.getenv("MEMORY_LOAD_LAST_N", "8")))
+    messages: List[Dict[str, str]] = []
+    for h in history:
+        messages.append({"role": h.get("role") or "user", "content": h.get("content") or ""})
+    messages.append({"role": "user", "content": q.user_input})
+
+    res = invoke_agent_with_retry(messages)
+    msgs = res.get("messages", [])
+    def view(m):
+        return {
+            "type": m.__class__.__name__ if hasattr(m, "__class__") else str(type(m)),
+            "content": getattr(m, "content", None) if hasattr(m, "content") else m.get("content", None),
+            "kwargs": getattr(m, "additional_kwargs", {}) if hasattr(m, "additional_kwargs") else m.get("additional_kwargs", {}),
+        }
+    return {"session_id": session_id, "messages": [view(m) for m in msgs]}
+
+# 清理会话记忆
+@app.post("/memory/clear")
+async def clear_session_memory(session_id: Optional[str] = Header(default=None)):
+    if not session_id:
+        raise HTTPException(status_code=400, detail="Missing session_id in header")
+    clear_memory(session_id)
+    return {"ok": True, "session_id": session_id}
+
+# 健康检查
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    mem_dir = os.getenv("MEMORY_DIR", "./mem_store")
+    ok = True
+    try:
+        os.makedirs(mem_dir, exist_ok=True)
+    except Exception:
+        ok = False
+    return {"status": "ok" if ok else "degraded", "memory_backend": "file", "dir": mem_dir}
 
 if __name__ == "__main__":
     uvicorn.run(f"{__name__}:app", host="0.0.0.0", port=8001)

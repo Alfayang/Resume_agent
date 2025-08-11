@@ -1,20 +1,34 @@
 # src/deepagents/services/siliconflow_client.py
 from __future__ import annotations
-import os, json, requests
+import os
+import json
 from typing import Tuple, Any, Dict, Optional
 
-# 可选：支持 .env（pip install python-dotenv）
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+# 可选：.env 支持
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except Exception:
     pass
 
-SILICONFLOW_API_URL = os.getenv(
-    "SILICONFLOW_API_URL",
-    "https://api.siliconflow.cn/v1/chat/completions"
-)
-SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY")  # 必填
+
+def _env(name: str, default: Optional[str] = None) -> Optional[str]:
+    v = os.getenv(name)
+    return v if v not in (None, "") else default
+
+
+# === 可配置项（通过环境变量覆盖） ===
+SILICONFLOW_BASE_URL = _env("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn")
+SILICONFLOW_API_PATH = _env("SILICONFLOW_API_PATH", "/v1/chat/completions")
+SILICONFLOW_API_KEY = _env("SILICONFLOW_API_KEY")  # 必填
+SILICONFLOW_TIMEOUT = float(_env("SILICONFLOW_TIMEOUT", "60"))
+SILICONFLOW_MAX_RETRIES = int(_env("SILICONFLOW_MAX_RETRIES", "3"))
+SILICONFLOW_BACKOFF_FACTOR = float(_env("SILICONFLOW_BACKOFF_FACTOR", "0.5"))
+
 
 class _Prompts:
     _CONTRACT_TEXT_PROMPT = "请在保留关键信息的前提下精简以下文本："
@@ -26,14 +40,55 @@ class _Prompts:
     _GENERATE_RECOMMENDATION_PROMPT = "根据以下信息生成推荐信（返回JSON结构）："
     _NAME_DOCUMENT_PROMPT = "请为以下Markdown文档生成一个简洁贴切的标题："
 
+
 class SiliconFlowClient(_Prompts):
-    def __init__(self, api_url: str, api_key: Optional[str]) -> None:
+    """
+    多实例友好：
+    - 每个进程各自持有一个 Session（连接复用，线程安全）
+    - 无可变全局状态（可横向扩容）
+    - 带自动重试和超时
+    """
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        api_path: Optional[str] = None,
+        api_key: Optional[str] = None,
+        timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
+        backoff_factor: Optional[float] = None,
+    ) -> None:
+        base_url = base_url or SILICONFLOW_BASE_URL
+        api_path = api_path or SILICONFLOW_API_PATH
+        api_key = api_key or SILICONFLOW_API_KEY
+        timeout = timeout or SILICONFLOW_TIMEOUT
+        max_retries = max_retries if max_retries is not None else SILICONFLOW_MAX_RETRIES
+        backoff_factor = backoff_factor if backoff_factor is not None else SILICONFLOW_BACKOFF_FACTOR
+
         if not api_key:
-            raise RuntimeError(
-                "SILICONFLOW_API_KEY 未设置。请在环境变量或 .env 中配置。"
-            )
-        self.api_url = api_url
+            raise RuntimeError("SILICONFLOW_API_KEY 未设置。请在环境变量或 .env 中配置。")
+
+        # 组合最终 URL（避免双斜杠）
+        self.api_url = f"{base_url.rstrip('/')}{api_path}"
         self.api_key = api_key
+        self.timeout = timeout
+
+        # Session + Retry（429/5xx 自动重试；只针对 POST）
+        self.session = requests.Session()
+        retry = Retry(
+            total=max_retries,
+            backoff_factor=backoff_factor,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],   # 只对 POST 生效
+            raise_on_status=False,
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount("https://", adapter)
+        self.session.mount("http://", adapter)
+        self.session.headers.update({
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        })
 
     def _call_siliconflow_with_meta(
         self,
@@ -41,42 +96,72 @@ class SiliconFlowClient(_Prompts):
         user_text: str,
         model: str,
         return_meta: bool = False,
+        *,
+        force_json: bool = False,   # 若后端支持 JSON Mode，可置 True
+        temperature: float = 0.3,
+        extra_payload: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Any, Dict[str, Any]]:
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        payload = {
+        """
+        与你现有工具兼容：返回 (content, meta)
+        - content: 尝试 json.loads；失败则返回字符串
+        - meta: 记录模型/用量等
+        """
+        payload: Dict[str, Any] = {
             "model": model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text},
             ],
-            "temperature": 0.3,
+            "temperature": temperature,
             "stream": False,
         }
-        resp = requests.post(self.api_url, headers=headers, data=json.dumps(payload), timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
 
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        usage = data.get("usage", {})
+        # 可选的 JSON 强约束（若 SiliconFlow/OpenAI 兼容端支持）
+        if force_json:
+            payload["response_format"] = {"type": "json_object"}
+
+        if extra_payload:
+            # 允许外部透传一些参数，例如 max_tokens / top_p 等
+            payload.update(extra_payload)
+
+        resp = self.session.post(self.api_url, json=payload, timeout=self.timeout)
+        # 非 2xx 会在这里 raise
+        resp.raise_for_status()
+
+        # 容错解析
+        try:
+            data = resp.json()
+        except Exception as e:
+            raise RuntimeError(f"SiliconFlow 返回非 JSON：{e}; text={resp.text[:300]}")
+
+        # OpenAI 兼容格式
+        msg = (data.get("choices") or [{}])[0].get("message", {})
+        content = msg.get("content", "")
+
+        # usage 元信息
+        usage = data.get("usage", {}) or {}
         meta = {
             "system_prompt": system_prompt,
             "model": model,
             "prompt_tokens": usage.get("prompt_tokens"),
             "completion_tokens": usage.get("completion_tokens"),
             "total_tokens": usage.get("total_tokens"),
+            "raw": data if return_meta else None,  # 需要时可返回原始响应
         }
 
-        # 某些任务需要 JSON：尝试解析（失败就保持字符串）
-        try:
-            content = json.loads(content)
-        except Exception:
-            pass
+        # 内容尽量转 JSON
+        if isinstance(content, str):
+            content_str = content.strip()
+            # 如果是 JSON 字符串，尝试解析
+            if content_str.startswith("{") or content_str.startswith("["):
+                try:
+                    content = json.loads(content_str)
+                except Exception:
+                    # 保持原字符串
+                    pass
 
-        # 无论 return_meta True/False，都返回 (content, meta) 以兼容你现有工具
         return content, meta
 
-# 导出一个单例
-sf_client = SiliconFlowClient(SILICONFLOW_API_URL, SILICONFLOW_API_KEY)
+
+# 导出一个单例（每个进程一份，无共享可变状态 → 多实例安全）
+sf_client = SiliconFlowClient()
