@@ -1,3 +1,9 @@
 deepagents
 langgraph-cli[inmem]
 tavily-python
+langchain-openai
+langchain-core
+langchain
+fastapi
+uvicorn
+pydantic

@@ -20,7 +20,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../s
 try:
     from deepagents import create_deep_agent
 except Exception:
-    from deepagents.agent_factory import create_deep_agent
+    from deepagents.graph import create_deep_agent
+
 
 # 你的工具（按你的实际路径）
 from deepagents.tools.text_parse_tool import parse_resume_text_tool
