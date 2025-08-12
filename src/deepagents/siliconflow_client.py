@@ -164,14 +164,4 @@ class SiliconFlowClient(_Prompts):
 
 
 # 导出一个单例（每个进程一份，无共享可变状态 → 多实例安全）
-# 延迟初始化，避免模块导入时就检查API密钥
-_sf_client = None
-
-def get_sf_client():
-    global _sf_client
-    if _sf_client is None:
-        _sf_client = SiliconFlowClient()
-    return _sf_client
-
-# 为了向后兼容，保留sf_client变量
-sf_client = get_sf_client()
+sf_client = SiliconFlowClient()

@@ -50,7 +50,7 @@
       chat.innerHTML += '<div class="msg ai" id="loading">AI 正在生成，请稍候...</div>';
       chat.scrollTop = chat.scrollHeight;
       // ========== 只取纯文本 ==========
-      fetch('http://localhost:8001/generate', {
+      fetch('http://localhost:8002/generate', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({user_input: msg})
