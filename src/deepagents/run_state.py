@@ -17,6 +17,14 @@ import uuid
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+# 内存中的任务状态管理
+import threading
+from typing import Dict, Any, Optional
+
+# 全局内存状态存储
+_memory_states: Dict[str, Dict[str, Any]] = {}
+_memory_lock = threading.Lock()
+
 # ------------ 目录配置 ------------
 RUN_DIR = os.getenv("RUN_DIR", "./run_store")
 MEM_DIR = os.getenv("MEMORY_DIR", "./mem_store")
@@ -42,8 +50,51 @@ def _run_path(trace_id: str) -> str:
     return os.path.join(RUN_DIR, f"{trace_id}.json")
 
 def _save_state(state: Dict[str, Any]) -> None:
-    with open(_run_path(state["trace_id"]), "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2, default=str)
+    """保存状态到JSON文件，支持增量更新"""
+    file_path = _run_path(state["trace_id"])
+    
+    # 如果文件不存在，直接写入
+    if not os.path.exists(file_path):
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2, default=str)
+        return
+    
+    # 如果文件存在，尝试增量更新
+    try:
+        # 读取现有状态
+        with open(file_path, "r", encoding="utf-8") as f:
+            existing_state = json.load(f)
+        
+        # 合并状态（新状态覆盖旧状态）
+        merged_state = {**existing_state, **state}
+        
+        # 特殊处理steps数组：追加而不是覆盖
+        if "steps" in state and "steps" in existing_state:
+            # 获取新的steps
+            new_steps = state["steps"]
+            existing_steps = existing_state["steps"]
+            
+            # 如果新steps是现有steps的扩展，则合并
+            if len(new_steps) >= len(existing_steps):
+                # 检查是否只是追加了新步骤
+                if new_steps[:len(existing_steps)] == existing_steps:
+                    merged_state["steps"] = new_steps
+                else:
+                    # 如果有变化，使用新状态
+                    merged_state["steps"] = new_steps
+            else:
+                # 如果新steps更短，保持现有状态
+                merged_state["steps"] = existing_steps
+        
+        # 写入合并后的状态
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(merged_state, f, ensure_ascii=False, indent=2, default=str)
+            
+    except Exception as e:
+        # 如果增量更新失败，回退到完整重写
+        print(f"增量更新失败，回退到完整重写: {e}")
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(state, f, ensure_ascii=False, indent=2, default=str)
 
 def _load_state(trace_id: str) -> Dict[str, Any]:
     p = _run_path(trace_id)
@@ -70,47 +121,127 @@ def _guess_action(user_input: str) -> str:
     return "rewrite_letter"
 
 # ------------ 公共 API ------------
-def create_run_state(session_id: str, user_input: str) -> Dict[str, Any]:
-    """创建一次运行状态并落盘；返回 state（含 trace_id / todo / action_guess）"""
+def create_run_state(session_id: Optional[str], user_input: str) -> Dict[str, Any]:
+    """创建新的运行状态"""
     trace_id = str(uuid.uuid4())
-    action = _guess_action(user_input)
-    state = {
-        "trace_id": trace_id,
-        "session_id": session_id,
-        "created_at": _now_iso(),
-        # 关键：不再预置固定 ToDo，交由三角色调度器动态写入（plan / step-i / step-i-validate）
-        "todo": [],
-        "action_guess": action,
-        "steps": [],
-        "validation": None,
-    }
-    _save_state(state)
-    return state
+    
+    # 创建内存状态
+    memory_state = create_memory_state(trace_id, session_id, user_input)
+    
+    # 创建文件状态（异步，不阻塞）
+    def _create_file_state():
+        try:
+            state = {
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "user_input": user_input,
+                "created_at": time.time(),
+                "todo": [],
+                "steps": [],
+                "validation": {"ok": False, "status": "pending"},
+                "plan_rationale": "正在初始化任务..."
+            }
+            
+            state_file = os.path.join(RUN_DIR, f"{trace_id}.json")
+            with open(state_file, "w", encoding="utf-8") as f:
+                json.dump(state, f, ensure_ascii=False, indent=2)
+            
+            print(f"📁 创建文件状态: {state_file}")
+        except Exception as e:
+            print(f"❌ 创建文件状态失败: {e}")
+    
+    # 在后台线程中创建文件状态
+    import threading
+    threading.Thread(target=_create_file_state, daemon=True).start()
+    
+    return memory_state
 
 def append_step(trace_id: str, name: str, status: str = "started", details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """追加 steps 记录并保存；返回最新 state。"""
-    state = _load_state(trace_id)
-    entry = {"ts": _now_iso(), "name": name, "status": status, "details": details or {}}
-    state.setdefault("steps", []).append(entry)
-    _save_state(state)
-    return state
+    """追加一个执行步骤"""
+    step = {
+        "name": name,
+        "status": status,
+        "ts": _now_iso(),
+        "details": details or {}
+    }
+    
+    # 更新内存状态
+    memory_state = get_memory_state(trace_id)
+    if memory_state:
+        if "steps" not in memory_state:
+            memory_state["steps"] = []
+        memory_state["steps"].append(step)
+        update_memory_state(trace_id, {"steps": memory_state["steps"]})
+    
+    # 更新文件状态（异步）
+    def _update_file_state():
+        try:
+            state = _load_state(trace_id)
+            if "steps" not in state:
+                state["steps"] = []
+            state["steps"].append(step)
+            _save_state(state)
+        except Exception as e:
+            print(f"❌ 更新文件状态失败: {e}")
+    
+    # 在后台线程中更新文件状态
+    import threading
+    threading.Thread(target=_update_file_state, daemon=True).start()
+    
+    return step
 
 def set_todo_status(trace_id: str, step: str, status: str) -> Dict[str, Any]:
-    """更新 ToDo 某一步的状态：pending | in_progress | completed | failed"""
-    state = _load_state(trace_id)
-    todo = state.get("todo") or []
-    found = False
-    for item in todo:
-        if item.get("step") == step:
-            item["status"] = status
-            found = True
-            break
-    if not found:
-        # 如果没有该 step，自动追加一条（防御性容错）
-        todo.append({"step": step, "desc": "", "status": status})
-    state["todo"] = todo
-    _save_state(state)
-    return state
+    """设置 ToDo 状态"""
+    # 更新内存状态
+    memory_state = get_memory_state(trace_id)
+    if memory_state:
+        if "todo" not in memory_state:
+            memory_state["todo"] = []
+        
+        # 查找或创建todo项
+        todo_item = None
+        for item in memory_state["todo"]:
+            if item.get("step") == step:
+                todo_item = item
+                break
+        
+        if not todo_item:
+            todo_item = {"step": step, "status": status, "desc": f"步骤: {step}"}
+            memory_state["todo"].append(todo_item)
+        else:
+            todo_item["status"] = status
+        
+        update_memory_state(trace_id, {"todo": memory_state["todo"]})
+    
+    # 更新文件状态（异步）
+    def _update_file_state():
+        try:
+            state = _load_state(trace_id)
+            if "todo" not in state:
+                state["todo"] = []
+            
+            # 查找或创建todo项
+            todo_item = None
+            for item in state["todo"]:
+                if item.get("step") == step:
+                    todo_item = item
+                    break
+            
+            if not todo_item:
+                todo_item = {"step": step, "status": status, "desc": f"步骤: {step}"}
+                state["todo"].append(todo_item)
+            else:
+                todo_item["status"] = status
+            
+            _save_state(state)
+        except Exception as e:
+            print(f"❌ 更新文件todo状态失败: {e}")
+    
+    # 在后台线程中更新文件状态
+    import threading
+    threading.Thread(target=_update_file_state, daemon=True).start()
+    
+    return {"step": step, "status": status}
 
 def validate_output(action: str, output: str) -> Tuple[bool, List[str]]:
     """基础校验：只返回最终结果；必要时 JSON 合法；长度限制。"""
@@ -139,16 +270,53 @@ def validate_output(action: str, output: str) -> Tuple[bool, List[str]]:
 
     return (len(issues) == 0), issues
 
-def set_validation(trace_id: str, ok: bool, issues: List[str]) -> Dict[str, Any]:
-    """保存校验结果并落盘；返回最新 state。"""
-    state = _load_state(trace_id)
-    state["validation"] = {"ok": ok, "issues": issues, "ts": _now_iso()}
-    _save_state(state)
-    return state
+def set_validation(trace_id: str, ok: bool, feedback: Optional[List[str]] = None) -> Dict[str, Any]:
+    """设置验证结果"""
+    validation = {
+        "ok": ok,
+        "status": "completed" if ok else "failed",
+        "feedback": feedback or []
+    }
+    
+    # 更新内存状态
+    update_memory_state(trace_id, {"validation": validation})
+    
+    # 更新文件状态（异步）
+    def _update_file_state():
+        try:
+            state = _load_state(trace_id)
+            state["validation"] = validation
+            _save_state(state)
+        except Exception as e:
+            print(f"❌ 更新文件验证状态失败: {e}")
+    
+    # 在后台线程中更新文件状态
+    import threading
+    threading.Thread(target=_update_file_state, daemon=True).start()
+    
+    return validation
 
 def load_state(trace_id: str) -> Dict[str, Any]:
-    """读取某次运行的完整状态"""
-    return _load_state(trace_id)
+    """加载运行状态（优先从内存，其次从文件）"""
+    # 首先尝试从内存加载
+    memory_state = get_memory_state(trace_id)
+    if memory_state:
+        return memory_state
+    
+    # 如果内存中没有，从文件加载
+    state_file = os.path.join(RUN_DIR, f"{trace_id}.json")
+    if not os.path.exists(state_file):
+        raise FileNotFoundError(f"状态文件不存在: {state_file}")
+    
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        
+        # 将文件状态同步到内存
+        update_memory_state(trace_id, state)
+        return state
+    except Exception as e:
+        raise RuntimeError(f"加载状态失败: {e}")
 
 def list_states(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """列出运行摘要（时间倒序）。"""
@@ -176,3 +344,44 @@ def list_states(session_id: Optional[str] = None) -> List[Dict[str, Any]]:
 def get_runtime_dirs() -> Dict[str, str]:
     """返回当前运行目录（健康检查用）"""
     return {"run_dir": RUN_DIR, "mem_dir": MEM_DIR}
+
+def create_memory_state(trace_id: str, session_id: Optional[str], user_input: str) -> Dict[str, Any]:
+    """在内存中创建任务状态"""
+    with _memory_lock:
+        initial_state = {
+            "trace_id": trace_id,
+            "session_id": session_id,
+            "user_input": user_input,
+            "created_at": time.time(),
+            "todo": [],
+            "steps": [],
+            "validation": {"ok": False, "status": "pending"},
+            "plan_rationale": "正在初始化任务..."
+        }
+        _memory_states[trace_id] = initial_state
+        print(f"📝 在内存中创建任务状态: {trace_id}")
+        return initial_state
+
+def update_memory_state(trace_id: str, updates: Dict[str, Any]) -> None:
+    """更新内存中的任务状态"""
+    with _memory_lock:
+        if trace_id in _memory_states:
+            _memory_states[trace_id].update(updates)
+            print(f"📝 更新内存任务状态: {trace_id} - {list(updates.keys())}")
+
+def get_memory_state(trace_id: str) -> Optional[Dict[str, Any]]:
+    """获取内存中的任务状态"""
+    with _memory_lock:
+        return _memory_states.get(trace_id)
+
+def remove_memory_state(trace_id: str) -> None:
+    """移除内存中的任务状态"""
+    with _memory_lock:
+        if trace_id in _memory_states:
+            del _memory_states[trace_id]
+            print(f"🗑️ 移除内存任务状态: {trace_id}")
+
+def list_memory_states() -> Dict[str, Dict[str, Any]]:
+    """列出所有内存中的任务状态"""
+    with _memory_lock:
+        return _memory_states.copy()

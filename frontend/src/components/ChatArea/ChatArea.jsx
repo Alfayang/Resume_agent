@@ -4,6 +4,7 @@ import MessageList from '../MessageList/MessageList';
 import ChatInput from '../ChatInput/ChatInput';
 
 const ChatArea = ({
+  conversation,
   messages,
   inputValue,
   setInputValue,
@@ -19,15 +20,17 @@ const ChatArea = ({
   handleDragLeave
 }) => {
   return (
-    <div className="flex-1 flex flex-col">
-      <ChatHeader />
-      <MessageList 
-        messages={messages}
-        isDragging={isDragging}
-        handleDrop={handleDrop}
-        handleDragOver={handleDragOver}
-        handleDragLeave={handleDragLeave}
-      />
+    <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <ChatHeader conversation={conversation} />
+      <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
+        <MessageList 
+          messages={messages}
+          isDragging={isDragging}
+          handleDrop={handleDrop}
+          handleDragOver={handleDragOver}
+          handleDragLeave={handleDragLeave}
+        />
+      </div>
       <ChatInput 
         inputValue={inputValue}
         setInputValue={setInputValue}

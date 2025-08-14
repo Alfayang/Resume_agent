@@ -1,0 +1,2 @@
+{"role": "user", "content": "你好", "ts": 1755082296.566663}
+{"role": "assistant", "content": "\nThe action \"generate_text\" is not supported by the doc-writer agent. \n\nThe available actions are:\n- rewrite_letter\n- expand\n- contract  \n- evaluate_resume\n- generate_statement\n- generate_recommendation\n- name_document\n- parse_resume_text\n\nPlease specify one of these valid actions instead.", "ts": 1755082296.566663}

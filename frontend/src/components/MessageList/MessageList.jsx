@@ -16,7 +16,7 @@ const MessageList = ({
 
   return (
     <div 
-      className={`flex-1 overflow-y-auto p-4 ${isDragging ? 'bg-purple-50' : ''}`}
+      className={`min-h-full p-4 ${isDragging ? 'bg-purple-50' : ''}`}
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}

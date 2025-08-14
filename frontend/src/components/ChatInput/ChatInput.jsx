@@ -158,9 +158,7 @@ const ChatInput = ({
         </div>
       </div>
 
-      <div className="mt-2 text-xs text-gray-500 text-center">
-        个人信息.txt • 22kb
-      </div>
+     
     </div>
   );
 };

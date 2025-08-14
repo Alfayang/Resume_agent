@@ -1,0 +1,61 @@
+{
+  "trace_id": "e5d1f4b0-05fb-48b1-b9a8-bedd64bdf205",
+  "session_id": "test-session-1755137513",
+  "created_at": "2025-08-14 10:11:53",
+  "todo": [
+    {
+      "step": "plan",
+      "desc": "",
+      "status": "completed"
+    },
+    {
+      "step": "step-1",
+      "desc": "",
+      "status": "completed"
+    }
+  ],
+  "action_guess": "rewrite_letter",
+  "steps": [
+    {
+      "ts": "2025-08-14 10:11:53",
+      "name": "init",
+      "status": "ok",
+      "details": {
+        "action": "任务初始化完成"
+      }
+    },
+    {
+      "ts": "2025-08-14 10:11:53",
+      "name": "planner",
+      "status": "started",
+      "details": {
+        "action": "开始任务规划"
+      }
+    },
+    {
+      "ts": "2025-08-14 10:11:55",
+      "name": "planner",
+      "status": "ok",
+      "details": {
+        "action": "任务规划完成"
+      }
+    },
+    {
+      "ts": "2025-08-14 10:11:56",
+      "name": "executor",
+      "status": "started",
+      "details": {
+        "action": "开始执行任务"
+      }
+    },
+    {
+      "ts": "2025-08-14 10:11:57",
+      "name": "executor",
+      "status": "ok",
+      "details": {
+        "action": "任务执行完成"
+      }
+    }
+  ],
+  "validation": null
+}

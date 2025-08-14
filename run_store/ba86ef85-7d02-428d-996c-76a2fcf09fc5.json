@@ -1,0 +1,22 @@
+{
+  "trace_id": "ba86ef85-7d02-428d-996c-76a2fcf09fc5",
+  "session_id": "296e119e-b590-467b-8227-d69a9f2c0b41",
+  "user_input": "测试消息",
+  "created_at": 1755188750.051755,
+  "todo": [],
+  "steps": [
+    {
+      "name": "planner",
+      "status": "started",
+      "ts": "2025-08-15 00:25:50",
+      "details": {
+        "action": "rewrite_letter"
+      }
+    }
+  ],
+  "validation": {
+    "ok": false,
+    "status": "pending"
+  },
+  "plan_rationale": "正在初始化任务..."
+}

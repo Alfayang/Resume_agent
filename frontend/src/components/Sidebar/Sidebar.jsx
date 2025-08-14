@@ -5,11 +5,41 @@ const Sidebar = ({
   searchQuery, 
   setSearchQuery, 
   setConversations, 
-  addNewConversation 
+  addNewConversation,
+  onConversationSelect
 }) => {
   const filteredConversations = conversations.filter(conv => 
     conv.title.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const deleteConversation = (conversationId, e) => {
+    // 阻止事件冒泡，避免触发选择对话
+    e.stopPropagation();
+    
+    // 从localStorage中删除对话的消息
+    localStorage.removeItem(`messages_${conversationId}`);
+    
+    // 更新对话列表状态
+    setConversations(prev => {
+      const updatedConversations = prev.filter(conv => conv.id !== conversationId);
+      
+      // 如果删除的是当前激活的对话且还有其他对话，激活第一个对话
+      if (prev.find(conv => conv.id === conversationId)?.active && updatedConversations.length > 0) {
+        updatedConversations[0].active = true;
+        if (onConversationSelect) {
+          onConversationSelect(updatedConversations[0]);
+        }
+      }
+      
+      // 如果删除对话后没有对话了，创建一个新的空对话
+      if (updatedConversations.length === 0) {
+        addNewConversation();
+        return [];
+      }
+      
+      return updatedConversations;
+    });
+  };
 
   return (
     <div className="w-80 bg-white border-r border-gray-200 flex flex-col">
@@ -30,18 +60,35 @@ const Sidebar = ({
       </div>
 
       {/* 对话列表 */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-gray-100">
         {filteredConversations.map((conv) => (
           <div
             key={conv.id}
             className={`p-4 border-b border-gray-100 cursor-pointer hover:bg-gray-50 ${
               conv.active ? 'bg-purple-50 border-l-4 border-l-purple-500' : ''
             }`}
-            onClick={() => setConversations(prev => prev.map(c => ({ ...c, active: c.id === conv.id })))}
+            onClick={() => {
+              setConversations(prev => prev.map(c => ({ ...c, active: c.id === conv.id })));
+              if (onConversationSelect) {
+                onConversationSelect(conv);
+              }
+            }}
           >
             <div className="flex items-center justify-between mb-1">
               <h3 className="font-medium text-gray-900 text-sm truncate">{conv.title}</h3>
-              <span className="text-xs text-gray-500">{conv.time}</span>
+              <div className="flex items-center">
+                <span className="text-xs text-gray-500 mr-2">{conv.time}</span>
+                {/* 删除按钮 */}
+                <button 
+                  onClick={(e) => deleteConversation(conv.id, e)}
+                  className="text-gray-400 hover:text-red-500 transition-colors"
+                  title="删除对话"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </div>
             </div>
             <div className="flex items-center text-xs text-gray-500">
               <svg className="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">

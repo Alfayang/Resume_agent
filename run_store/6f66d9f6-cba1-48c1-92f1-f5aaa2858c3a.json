@@ -1,0 +1,13 @@
+{
+  "trace_id": "6f66d9f6-cba1-48c1-92f1-f5aaa2858c3a",
+  "session_id": "1755165865061",
+  "user_input": "我是李明，来自上海大学，现在是自动化专业大四，GPA3.8/4.0,获得过两项专利，我想申请利兹大学，帮助我构写一篇简短推荐信（100字以内）",
+  "created_at": 1755188771.3416722,
+  "todo": [],
+  "steps": [],
+  "validation": {
+    "ok": false,
+    "status": "pending"
+  },
+  "plan_rationale": "正在初始化任务..."
+}

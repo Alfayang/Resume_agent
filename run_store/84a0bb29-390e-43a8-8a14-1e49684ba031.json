@@ -1,0 +1,110 @@
+{
+  "trace_id": "84a0bb29-390e-43a8-8a14-1e49684ba031",
+  "session_id": "string",
+  "created_at": "2025-08-13 17:31:41",
+  "todo": [
+    {
+      "step": "plan",
+      "desc": "",
+      "status": "completed"
+    },
+    {
+      "step": "step-1",
+      "desc": "",
+      "status": "completed"
+    },
+    {
+      "step": "step-1-validate",
+      "desc": "",
+      "status": "completed"
+    },
+    {
+      "step": "step-2",
+      "desc": "",
+      "status": "in_progress"
+    }
+  ],
+  "action_guess": "rewrite_letter",
+  "steps": [
+    {
+      "ts": "2025-08-13 17:31:41",
+      "name": "log",
+      "status": "info",
+      "details": {
+        "t": "17:31:41",
+        "msg": "Initial Prompt received"
+      }
+    },
+    {
+      "ts": "2025-08-13 17:31:41",
+      "name": "planner",
+      "status": "started",
+      "details": {
+        "action": "rewrite_letter"
+      }
+    },
+    {
+      "ts": "2025-08-13 17:39:45",
+      "name": "planner",
+      "status": "ok",
+      "details": {
+        "steps": [
+          "Collect personal information",
+          "Gather work experience",
+          "Document educational background",
+          "Identify professional skills",
+          "Establish career objectives",
+          "Structure resume format",
+          "Refine resume content"
+        ],
+        "rationale": "Generating a resume is feasible after collecting all necessary information about the user's background, experience, and career goals."
+      }
+    },
+    {
+      "ts": "2025-08-13 17:39:45",
+      "name": "executor",
+      "status": "started",
+      "details": {
+        "step": "Collect personal information",
+        "attempt": 1
+      }
+    },
+    {
+      "ts": "2025-08-13 17:42:34",
+      "name": "executor",
+      "status": "ok",
+      "details": {
+        "outputs_keys": [
+          "text",
+          "used_tool"
+        ],
+        "tool": "collect_information"
+      }
+    },
+    {
+      "ts": "2025-08-13 17:48:29",
+      "name": "validator",
+      "status": "ok",
+      "details": {
+        "step": "Collect personal information",
+        "feedback": "候选输出成功请求用户提供所有必要的个人信息"
+      }
+    },
+    {
+      "ts": "2025-08-13 17:48:29",
+      "name": "executor",
+      "status": "started",
+      "details": {
+        "step": "Gather work experience",
+        "attempt": 1
+      }
+    }
+  ],
+  "validation": {
+    "ok": true,
+    "issues": [
+      "候选输出成功请求用户提供所有必要的个人信息"
+    ],
+    "ts": "2025-08-13 17:48:29"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "trace_id": "cb0fa7a0-3ff1-4f36-9760-11ced78a63c8",
+  "session_id": "346a9321-c476-40d1-9f2b-820e59b21ba1",
+  "user_input": "好",
+  "created_at": 1755184223.7543788,
+  "todo": [
+    {
+      "step": "plan",
+      "status": "in_progress",
+      "desc": "步骤: plan"
+    }
+  ],
+  "steps": [
+    {
+      "name": "log",
+      "status": "info",
+      "ts": "2025-08-14 23:10:23",
+      "details": {
+        "t": "23:10:23",
+        "msg": "Initial Prompt received"
+      }
+    }
+  ],
+  "validation": {
+    "ok": false,
+    "status": "pending"
+  },
+  "plan_rationale": "正在初始化任务..."
+}

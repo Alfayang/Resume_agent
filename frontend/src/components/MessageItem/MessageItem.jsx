@@ -38,7 +38,7 @@ const MessageItem = ({ message }) => {
                 思考过程
               </div>
               <ul className="text-sm text-gray-600 space-y-1">
-                {message.thinkingProcess.map((step, index) => (
+                {message.thinkingProcess && message.thinkingProcess.map((step, index) => (
                   <li key={index} className="flex items-start">
                     <span className="w-1.5 h-1.5 bg-gray-400 rounded-full mt-2 mr-2 flex-shrink-0"></span>
                     {step}

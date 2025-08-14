@@ -1,0 +1,13 @@
+{
+  "trace_id": "1af467e8-ff0b-4722-8196-5a7b8a08c6ae",
+  "session_id": "346a9321-c476-40d1-9f2b-820e59b21ba1",
+  "user_input": "好",
+  "created_at": 1755184223.7523985,
+  "todo": [],
+  "steps": [],
+  "validation": {
+    "ok": false,
+    "status": "pending"
+  },
+  "plan_rationale": "正在初始化任务..."
+}
