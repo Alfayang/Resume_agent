@@ -22,17 +22,17 @@ function App() {
     // 如果没有保存的对话，创建一个新的空对话
     const now = new Date();
     return [
-      { 
-        id: Date.now(), 
-        title: '新对话', 
+      {
+        id: Date.now(),
+        title: '新对话',
         time: now.toLocaleDateString() + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         createdAt: now.toISOString(),
-        active: true, 
-        isDemo: false 
+        active: true,
+        isDemo: false
       }
     ];
   });
-  
+
   // 从localStorage恢复当前对话的消息
   const [currentMessages, setCurrentMessages] = useState(() => {
     // 默认欢迎消息
@@ -45,13 +45,13 @@ function App() {
       }
     ];
   });
-  
+
   const [inputValue, setInputValue] = useState('');
   const [uploadedFiles, setUploadedFiles] = useState([]);
   const [isDragging, setIsDragging] = useState(false);
   const [showQuickActions, setShowQuickActions] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  
+
   // 任务执行状态
   const [taskState, setTaskState] = useState(() => {
     // 从localStorage恢复任务状态
@@ -84,7 +84,7 @@ function App() {
       planRationale: ''
     };
   });
-  
+
   const [showTaskBar, setShowTaskBar] = useState(true);
 
   // 保存对话列表到localStorage
@@ -100,12 +100,12 @@ function App() {
     }
   }, [currentMessages, conversations]);
 
-  // 组件卸载时清理EventSource连接
+  // 组件卸载时清理轮询
   useEffect(() => {
     return () => {
-      if (window.currentEventSource) {
-        window.currentEventSource.close();
-        window.currentEventSource = null;
+      if (window.currentPollInterval) {
+        clearInterval(window.currentPollInterval);
+        window.currentPollInterval = null;
       }
     };
   }, []);
@@ -152,7 +152,7 @@ function App() {
       isDemo: false
     };
     setConversations(prev => prev.map(conv => ({ ...conv, active: false })).concat(newConversation));
-    
+
     // 切换到新对话时，清空消息并显示欢迎信息
     const welcomeMessage = {
       id: 1,
@@ -195,7 +195,7 @@ function App() {
     if (inputValue.trim() || uploadedFiles.length > 0) {
       const currentConversation = conversations.find(c => c.active);
       const isDemo = currentConversation?.isDemo || false;
-      
+
       // 如果当前有任务在执行，先中断
       if (taskState.isExecuting) {
         console.log('检测到正在执行的任务，先中断');
@@ -203,7 +203,7 @@ function App() {
         // 等待一小段时间确保中断完成
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      
+
       const newMessage = {
         id: generateUniqueId(),
         type: 'user',
@@ -214,7 +214,7 @@ function App() {
       setCurrentMessages(prev => [...prev, newMessage]);
       setInputValue('');
       setUploadedFiles([]);
-      
+
       // 如果是演示对话，显示模拟回复
       if (isDemo) {
         setTimeout(() => {
@@ -228,7 +228,7 @@ function App() {
         }, 1000);
         return;
       }
-      
+
       // 立即初始化任务状态，让TaskBar立即显示
       const initialTaskState = {
         isExecuting: true,
@@ -237,18 +237,18 @@ function App() {
           { step: 'prepare', status: 'in_progress', desc: '正在准备任务环境' }
         ],
         executionSteps: [
-          { 
-            name: 'prepare', 
-            status: 'started', 
-            ts: new Date().toLocaleString(), 
-            details: { action: '初始化任务' } 
+          {
+            name: 'prepare',
+            status: 'started',
+            ts: new Date().toLocaleString(),
+            details: { action: '初始化任务' }
           }
         ],
         traceId: null,
         planRationale: '正在分析您的请求...'
       };
       setTaskState(initialTaskState);
-      
+
       // 真实对话：调用后端API
       const thinkingMessage = {
         id: generateUniqueId(),
@@ -258,7 +258,7 @@ function App() {
         isThinking: true
       };
       setCurrentMessages(prev => [...prev, thinkingMessage]);
-      
+
       try {
         // 处理文件内容
         let fileContent = '';
@@ -271,39 +271,39 @@ function App() {
             fileContent = `文件: ${file.name} (无法读取内容)`;
           }
         }
-        
+
         // 构建请求体
         const requestBody = {
           user_input: inputValue + (fileContent ? `\n\n附件内容:\n${fileContent}` : '')
         };
-        
+
         // 只有在有会话ID时才添加
         if (currentConversation?.id) {
           requestBody.session_id = currentConversation.id.toString();
         }
-        
+
         console.log('发送请求:', requestBody);
         console.log('trace_id:', requestBody.session_id);
         console.log('session_id:', requestBody.session_id);
-        
+
         const response = await fetch(getApiUrl(API_CONFIG.ENDPOINTS.GENERATE), {
           method: 'POST',
           headers: API_CONFIG.REQUEST_CONFIG.headers,
           body: JSON.stringify(requestBody)
         });
-        
+
         if (!response.ok) {
           const errorText = await response.text();
           console.error('API错误详情:', errorText);
           throw new Error(`API请求失败: ${response.status} - ${errorText}`);
         }
-        
+
         const data = await response.json();
         console.log('API响应:', data);
         console.log('API响应中的trace_id:', data.trace_id);
         console.log('API响应类型:', typeof data.trace_id);
         console.log('API响应完整结构:', JSON.stringify(data, null, 2));
-        
+
         // 更新任务状态，保留准备阶段的信息
         console.log('设置taskState，trace_id:', data.trace_id);
         setTaskState(prev => {
@@ -322,7 +322,7 @@ function App() {
           console.log('新的taskState:', newState);
           return newState;
         });
-        
+
         // 移除思考状态，添加处理中的消息
         setCurrentMessages(prev => {
           const filtered = prev.filter(msg => msg.id !== thinkingMessage.id);
@@ -335,7 +335,7 @@ function App() {
             isProcessing: true // 标记为正在处理中
           }];
         });
-        
+
         // 如果有trace_id，开始流式状态监听
         if (data.trace_id) {
           // 立即获取一次状态
@@ -353,15 +353,16 @@ function App() {
           } catch (error) {
             console.error('立即获取状态失败:', error);
           }
-          
-          // 开始流式状态监听
-          streamExecutionStatus(data.trace_id);
+
+          // 开始轮询状态监听
+          console.log('开始轮询状态监听，trace_id:', data.trace_id);
+          pollExecutionStatus(data.trace_id);
         }
-        
+
       } catch (error) {
         console.error('API调用失败:', error);
         setTaskState(prev => ({ ...prev, isExecuting: false }));
-        
+
         // 移除思考状态，添加错误消息
         setCurrentMessages(prev => {
           const filtered = prev.filter(msg => msg.id !== thinkingMessage.id);
@@ -383,22 +384,22 @@ function App() {
     console.log('window.testTraceId:', window.testTraceId);
     const traceIdToUse = window.testTraceId || taskState.traceId;
     console.log('使用的traceIdToUse:', traceIdToUse);
-    
+
     if (traceIdToUse) {
       try {
         console.log('手动刷新状态，使用trace_id:', traceIdToUse);
         console.log('请求URL:', getApiUrl(`${API_CONFIG.ENDPOINTS.STATE}/${traceIdToUse}`));
         console.log('当前API配置:', API_CONFIG);
-        
+
         const response = await fetch(getApiUrl(`${API_CONFIG.ENDPOINTS.STATE}/${traceIdToUse}`));
         console.log('状态响应状态码:', response.status);
         console.log('响应头:', response.headers);
         console.log('响应URL:', response.url);
-        
+
         if (response.ok) {
           const stateData = await response.json();
           console.log('获取到的状态数据:', stateData);
-          
+
           setTaskState(prev => ({
             ...prev,
             traceId: traceIdToUse, // 更新traceId
@@ -407,7 +408,7 @@ function App() {
             planRationale: stateData.plan_rationale || prev.planRationale,
             isExecuting: !stateData.validation?.ok // 根据验证状态判断是否还在执行
           }));
-          
+
           // 清除测试用的trace_id
           if (window.testTraceId) {
             delete window.testTraceId;
@@ -433,14 +434,14 @@ function App() {
     if (taskState.traceId) {
       console.log('重试任务:', taskState.traceId);
       setTaskState(prev => ({ ...prev, isExecuting: true, currentStep: null }));
-      streamExecutionStatus(taskState.traceId);
+      pollExecutionStatus(taskState.traceId);
     }
   };
 
   // 全局中断函数
   const forceInterrupt = async () => {
     console.log('强制中断所有任务');
-    
+
     // 如果有traceId，先调用后端中断端点
     if (taskState.traceId) {
       try {
@@ -449,7 +450,7 @@ function App() {
           method: 'POST',
           headers: API_CONFIG.REQUEST_CONFIG.headers
         });
-        
+
         if (response.ok) {
           const result = await response.json();
           console.log('后端中断响应:', result);
@@ -460,20 +461,20 @@ function App() {
         console.error('调用后端中断端点失败:', error);
       }
     }
-    
-    // 立即关闭EventSource连接
-    if (window.currentEventSource) {
-      window.currentEventSource.close();
-      window.currentEventSource = null;
+
+    // 清除轮询
+    if (window.currentPollInterval) {
+      clearInterval(window.currentPollInterval);
+      window.currentPollInterval = null;
     }
-    
+
     // 保留任务数据，只重置执行状态
     setTaskState(prev => ({
       ...prev,
       isExecuting: false,
       currentStep: 'interrupted'
     }));
-    
+
     // 移除思考状态消息，添加中断提示
     setCurrentMessages(prev => {
       const filtered = prev.filter(msg => !msg.isThinking);
@@ -484,10 +485,10 @@ function App() {
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }];
     });
-    
+
     // 清除localStorage中的任务状态
     localStorage.removeItem('taskState');
-    
+
     console.log('任务已中断，界面已更新');
   };
 
@@ -495,20 +496,20 @@ function App() {
   const interruptTask = async () => {
     console.log('中断按钮被点击');
     console.log('当前任务状态:', taskState);
-    
-    // 立即关闭EventSource连接（如果存在）
-    if (window.currentEventSource) {
-      window.currentEventSource.close();
-      window.currentEventSource = null;
+
+    // 清除轮询（如果存在）
+    if (window.currentPollInterval) {
+      clearInterval(window.currentPollInterval);
+      window.currentPollInterval = null;
     }
-    
+
     // 立即更新状态为中断
-    setTaskState(prev => ({ 
-      ...prev, 
-      isExecuting: false, 
-      currentStep: 'interrupted' 
+    setTaskState(prev => ({
+      ...prev,
+      isExecuting: false,
+      currentStep: 'interrupted'
     }));
-    
+
     // 立即移除思考状态消息
     setCurrentMessages(prev => {
       const filtered = prev.filter(msg => !msg.isThinking);
@@ -519,7 +520,7 @@ function App() {
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       }];
     });
-    
+
     // 如果有traceId，调用后端中断端点
     if (taskState.traceId) {
       try {
@@ -528,7 +529,7 @@ function App() {
           method: 'POST',
           headers: API_CONFIG.REQUEST_CONFIG.headers
         });
-        
+
         if (response.ok) {
           const result = await response.json();
           console.log('后端中断响应:', result);
@@ -539,10 +540,10 @@ function App() {
         console.error('调用后端中断端点失败:', error);
       }
     }
-    
+
     // 清除localStorage中的任务状态
     localStorage.removeItem('taskState');
-    
+
     console.log('任务已中断，界面已更新');
   };
 
@@ -551,10 +552,10 @@ function App() {
     const lastUserMessage = currentMessages
       .filter(msg => msg.type === 'user')
       .pop();
-    
+
     if (lastUserMessage) {
       setInputValue(lastUserMessage.content);
-      
+
       // 添加重新发送提示
       const resendMessage = {
         id: generateUniqueId(),
@@ -563,7 +564,7 @@ function App() {
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       setCurrentMessages(prev => [...prev, resendMessage]);
-      
+
       // 自动发送消息
       setTimeout(() => {
         sendMessage();
@@ -571,78 +572,92 @@ function App() {
     }
   };
 
-  // 流式执行状态监听
-  const streamExecutionStatus = (traceId) => {
+  // 轮询执行状态监听
+  const pollExecutionStatus = (traceId) => {
     if (!traceId) return;
 
-    // 注意：URL需要正确构建，指向你的流式端点
-    const eventSourceUrl = getApiUrl(`/stream/state/${traceId}`);
-    const eventSource = new EventSource(eventSourceUrl);
+    // 清除之前的轮询
+    if (window.currentPollInterval) {
+      clearInterval(window.currentPollInterval);
+    }
 
-    // 监听 'message' 事件，这是默认事件类型
-    eventSource.onmessage = (event) => {
-      const stateData = JSON.parse(event.data);
+    // 设置轮询间隔（1秒，便于调试）
+    const pollInterval = 1000;
 
-      // 若包含最终文本，则更新最后一条“处理中”消息
-      if (stateData.final_text) {
-        setCurrentMessages(prev => {
-          const idx = [...prev].reverse().findIndex(m => m.isProcessing);
-          if (idx !== -1) {
-            const realIdx = prev.length - 1 - idx;
-            const updated = [...prev];
-            updated[realIdx] = { ...updated[realIdx], content: stateData.final_text, isProcessing: false };
-            return updated;
+    const pollState = async () => {
+      try {
+        console.log('轮询请求URL:', getApiUrl(`${API_CONFIG.ENDPOINTS.STATE}/${traceId}`));
+        const response = await fetch(getApiUrl(`${API_CONFIG.ENDPOINTS.STATE}/${traceId}`));
+        console.log('轮询响应状态:', response.status);
+        if (response.ok) {
+          const stateData = await response.json();
+
+          console.log('轮询获取到状态:', stateData);
+
+          // 更新任务状态
+          setTaskState(prev => ({
+            ...prev,
+            isExecuting: !stateData.validation?.ok,
+            todoList: stateData.todo || prev.todoList,
+            executionSteps: stateData.steps || prev.executionSteps,
+            planRationale: stateData.plan_rationale || prev.planRationale,
+          }));
+
+          // 若包含最终文本，则更新最后一条"处理中"消息
+          const finalText = stateData.final_text || stateData.rewritten_letter || stateData.result;
+          if (finalText) {
+            setCurrentMessages(prev => {
+              const idx = [...prev].reverse().findIndex(m => m.isProcessing);
+              if (idx !== -1) {
+                const realIdx = prev.length - 1 - idx;
+                const updated = [...prev];
+                updated[realIdx] = { ...updated[realIdx], content: finalText, isProcessing: false };
+                return updated;
+              }
+              return prev;
+            });
           }
-          return prev;
-        });
-      }
 
-      // 检查特殊状态信号
-      if (stateData.status === 'completed' || stateData.status === 'interrupted' || stateData.status === 'timeout') {
-        console.log(`流式更新结束，状态: ${stateData.status}`);
-        setTaskState(prev => ({ ...prev, isExecuting: false, currentStep: stateData.status }));
-        eventSource.close();
-        return;
-      }
-      
-      if (stateData.error) {
-        console.error('流式更新错误:', stateData.error);
-        // 同步错误到消息
-        setCurrentMessages(prev => {
-          const idx = [...prev].reverse().findIndex(m => m.isProcessing);
-          if (idx !== -1) {
-            const realIdx = prev.length - 1 - idx;
-            const updated = [...prev];
-            updated[realIdx] = { ...updated[realIdx], content: `出错：${stateData.error}`, isProcessing: false };
-            return updated;
+          // 如果任务完成，停止轮询并更新最终状态
+          if (stateData.validation?.ok || stateData.status === 'completed' || stateData.status === 'interrupted' || stateData.status === 'timeout') {
+            console.log(`轮询结束，状态: ${stateData.status}`);
+            clearInterval(window.currentPollInterval);
+            window.currentPollInterval = null;
+            setTaskState(prev => ({ ...prev, isExecuting: false, currentStep: stateData.status }));
+
+            // 更新最终消息内容 - 无论验证是否通过都显示最终结果
+            console.log('任务完成，更新最终消息...');
+            setCurrentMessages(prev => {
+              const idx = [...prev].reverse().findIndex(m => m.isProcessing);
+              if (idx !== -1) {
+                const realIdx = prev.length - 1 - idx;
+                const updated = [...prev];
+                // 优先使用之前获取的finalText，然后尝试从stateData中获取
+                const finalContent = finalText || stateData.final_text || stateData.rewritten_letter || stateData.result || '✅ 任务执行完成！请查看右侧的执行详情了解完整过程。';
+
+                updated[realIdx] = {
+                  ...updated[realIdx],
+                  content: finalContent, // 使用最终内容
+                  isProcessing: false
+                };
+                return updated;
+              }
+              return prev;
+            });
           }
-          return prev;
-        });
-        setTaskState(prev => ({ ...prev, isExecuting: false, currentStep: 'error' }));
-        eventSource.close();
-        return;
+        } else {
+          console.error('轮询状态请求失败:', response.status);
+        }
+      } catch (error) {
+        console.error('轮询状态失败:', error);
       }
-
-      // 更新UI状态
-      console.log('接收到状态流更新:', stateData);
-      setTaskState(prev => ({
-        ...prev,
-        isExecuting: !stateData.validation?.ok,
-        todoList: stateData.todo || prev.todoList,
-        executionSteps: stateData.steps || prev.executionSteps,
-        planRationale: stateData.plan_rationale || prev.planRationale,
-      }));
     };
 
-    // 监听错误事件
-    eventSource.onerror = (err) => {
-      console.error('EventSource 失败:', err);
-      setTaskState(prev => ({ ...prev, isExecuting: false, currentStep: 'error' }));
-      eventSource.close();
-    };
+    // 立即执行一次
+    pollState();
 
-    // 将 eventSource 实例存到 window 对象，以便在组件卸载或中断时可以关闭它
-    window.currentEventSource = eventSource;
+    // 设置定时轮询
+    window.currentPollInterval = setInterval(pollState, pollInterval);
   };
 
   // 获取步骤显示名称
@@ -679,7 +694,7 @@ function App() {
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden">
-      <Sidebar 
+      <Sidebar
         conversations={conversations}
         searchQuery={searchQuery}
         setSearchQuery={setSearchQuery}
@@ -688,7 +703,7 @@ function App() {
         onConversationSelect={(conversation) => {
           // 切换对话
           setConversations(prev => prev.map(conv => ({ ...conv, active: conv.id === conversation.id })));
-          
+
           // 从localStorage加载对话消息
           const savedMessages = localStorage.getItem(`messages_${conversation.id}`);
           if (savedMessages) {
@@ -709,7 +724,7 @@ function App() {
       <div className="flex-1 flex">
         {/* 左侧：聊天区域 */}
         <div className="flex-1 flex flex-col">
-          <ChatArea 
+          <ChatArea
             conversation={conversations.find(c => c.active)}
             messages={currentMessages}
             inputValue={inputValue}
@@ -726,22 +741,22 @@ function App() {
             handleDragLeave={handleDragLeave}
           />
         </div>
-        
+
         {/* 右侧：TaskBar区域 */}
         {showTaskBar && (
           <div className="w-80 border-l border-gray-200 bg-gray-50">
-            <TaskBar 
-              taskState={taskState} 
-              onRefresh={refreshTaskState} 
-              onRetry={retryTask} 
-              onInterrupt={forceInterrupt} 
+            <TaskBar
+              taskState={taskState}
+              onRefresh={refreshTaskState}
+              onRetry={retryTask}
+              onInterrupt={forceInterrupt}
               onResend={resendLastMessage}
               onTest={testTaskBar}
               onToggle={() => setShowTaskBar(false)}
             />
           </div>
         )}
-        
+
         {/* TaskBar切换按钮 */}
         {!showTaskBar && (
           <div className="w-8 border-l border-gray-200 bg-gray-50 flex items-center justify-center">

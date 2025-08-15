@@ -44,9 +44,4 @@
   },
   "plan_rationale": "正在初始化任务..."
 }
-  "validation": {
-    "ok": false,
-    "status": "pending"
-  },
-  "plan_rationale": "正在初始化任务..."
-}
+  

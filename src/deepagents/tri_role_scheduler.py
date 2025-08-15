@@ -75,18 +75,6 @@ def _now():
 def _log(trace_id: str, msg: str):
     append_step(trace_id, "log", "info", {"t": _now(), "msg": msg})
 
-def _check_interruption(trace_id: str) -> bool:
-    """检查任务是否被中断（改进版本）"""
-    try:
-        from deepagents.interrupt_manager import get_interrupt_manager
-        interrupt_manager = get_interrupt_manager()
-        is_interrupted = interrupt_manager.is_interrupted(trace_id)
-        if is_interrupted:
-            print(f"🛑 检测到中断信号: {trace_id}")
-        return is_interrupted
-    except ImportError:
-        return False
-
 def _steps_outline(steps: List[TodoStep]) -> List[Dict[str, Any]]:
     return [{"idx": i+1, "title": s.title, "need_validation": s.need_validation, "tool_hint": s.tool_hint} for i, s in enumerate(steps)]
 
@@ -450,15 +438,6 @@ def run_textual_flow(
         "last_failed_feedback": ""
     }
     _log(trace_id, "Initial Prompt received")
-    
-    # 注册任务到中断管理器
-    try:
-        from deepagents.interrupt_manager import get_interrupt_manager
-        interrupt_manager = get_interrupt_manager()
-        interrupt_manager.register_task(trace_id, user_input)
-        print(f"🚀 开始处理任务: {trace_id}")
-    except ImportError:
-        pass
 
     # 1) 规划 + 可行性评估
     planner = make_llm_planner(max_loops=plan_max_loops)
@@ -493,42 +472,10 @@ def run_textual_flow(
         for idx, step in enumerate(current_steps):
             # 执行（带重试 + must_fix）
             while True:
-                # 检查是否被中断 - 在每个步骤开始时检查
-                if _check_interruption(trace_id):
-                    append_step(trace_id, "executor", "interrupted", {"step": step.title, "reason": "User requested interruption"})
-                    set_todo_status(trace_id, f"step-{idx+1}", "interrupted")
-                    
-                    # 清理任务
-                    try:
-                        from deepagents.interrupt_manager import get_interrupt_manager
-                        interrupt_manager = get_interrupt_manager()
-                        interrupt_manager.cleanup_task(trace_id)
-                        print(f"🛑 执行步骤被中断，清理任务信息: {trace_id}")
-                    except ImportError:
-                        pass
-                    
-                    return current_steps, final_text
-                
                 set_todo_status(trace_id, f"step-{idx+1}", "in_progress")
                 append_step(trace_id, "executor", "started", {"step": step.title, "attempt": step.attempts+1})
                 step.status   = "in_progress"
                 step.attempts += 1
-                
-                # 在每次重试前也检查中断状态
-                if _check_interruption(trace_id):
-                    append_step(trace_id, "executor", "interrupted", {"step": step.title, "reason": "User requested interruption during retry"})
-                    set_todo_status(trace_id, f"step-{idx+1}", "interrupted")
-                    
-                    # 清理任务
-                    try:
-                        from deepagents.interrupt_manager import get_interrupt_manager
-                        interrupt_manager = get_interrupt_manager()
-                        interrupt_manager.cleanup_task(trace_id)
-                        print(f"🛑 重试步骤被中断，清理任务信息: {trace_id}")
-                    except ImportError:
-                        pass
-                    
-                    return current_steps, final_text
                 try:
                     out = executor(ctx, step) or {}
                     step.outputs.update(out)
@@ -575,43 +522,11 @@ def run_textual_flow(
     # 3) Planner 总体复评（可重规划≤overall_replan_max）
     replan_times = 0
     while True:
-        # 检查是否被中断
-        if _check_interruption(trace_id):
-            append_step(trace_id, "planner_review", "interrupted", {"reason": "User requested interruption during overall review"})
-            
-            # 清理任务
-            try:
-                from deepagents.interrupt_manager import get_interrupt_manager
-                interrupt_manager = get_interrupt_manager()
-                interrupt_manager.cleanup_task(trace_id)
-                print(f"🛑 任务被中断，清理任务信息: {trace_id}")
-            except ImportError:
-                pass
-            
-            return {
-                "trace_id": trace_id,
-                "session_id": session_id,
-                "done": False,
-                "plan_rationale": "Task interrupted by user",
-                "checklist": [s.__dict__ for s in steps],
-                "final_text": final_text,
-            }
-        
         overall_ok, rationale, new_steps = planner_overall_review(ctx, steps, {"final_text": final_text})
         append_step(trace_id, "planner_review", "ok" if overall_ok else "warn", {"rationale": rationale})
 
         if overall_ok or replan_times >= overall_replan_max or not new_steps:
             done = overall_ok and all(s.status == "completed" or not s.need_validation for s in steps)
-            
-            # 清理任务
-            try:
-                from deepagents.interrupt_manager import get_interrupt_manager
-                interrupt_manager = get_interrupt_manager()
-                interrupt_manager.cleanup_task(trace_id)
-                print(f"✅ 任务完成，清理任务信息: {trace_id}")
-            except ImportError:
-                pass
-            
             return {
                 "trace_id": trace_id,
                 "session_id": session_id,
