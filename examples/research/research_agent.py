@@ -7,11 +7,9 @@ import time
 import random
 import logging
 import uvicorn
-import asyncio
 from typing import Any, List, Dict, Optional
 
-from fastapi import FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -237,37 +235,31 @@ def invoke_agent_with_retry(messages: List[Dict[str, str]]) -> Dict[str, Any]:
     )
     return {"rewritten_text": last_user}
 
-# ====== 路由（/generate：按需流式）======
+# ====== 路由（使用三角色轮转）======
 @app.post("/generate")
 async def generate_report(
-    request: Request,
-    q: Question,
-    x_session_id: Optional[str] = Header(default=None),
-    stream: bool = Query(False, description="是否以SSE流式返回最终结果（默认false）"),
+    q: Question, x_session_id: Optional[str] = Header(default=None)
 ):
-    """
-    - 默认：返回JSON（兼容旧客户端）
-    - stream=true 或 Accept: text/event-stream 时：SSE流式返回最终文本（先跑完整tri-role流程，再分块推送 final_text）
-    """
     # 1) Entrance：会话 & 历史
     session_id = x_session_id or q.session_id or str(uuid.uuid4())
     last_n = int(os.getenv("MEMORY_LOAD_LAST_N", "8"))
     history = load_memory(session_id, last_n=last_n)
 
-    # 2) Textual Flow：Planner → Executor（逐个）→ Validator（逐个）→ Planner 总体复评
+    # 2) 跑 Textual Flow：Planner → (Loop) → Executor（逐个）→ Validator（逐个）→ Planner 总体复评（可重跑）
     result = run_textual_flow(
         user_input=q.user_input,
         session_id=session_id,
         history=history,
         pick_output=_pick_output,
         agent_invoke_with_retry=invoke_agent_with_retry,
-        plan_max_loops=int(os.getenv("PLAN_MAX_LOOPS", "3")),
-        step_max_attempts=int(os.getenv("STEP_MAX_ATTEMPTS", "2")),
-        pass_threshold=float(os.getenv("VAL_PASS_THRESHOLD", "0.75")),
-        overall_replan_max=int(os.getenv("OVERALL_REPLAN_MAX", "1")),
+        plan_max_loops=int(os.getenv("PLAN_MAX_LOOPS","3")),
+        step_max_attempts=int(os.getenv("STEP_MAX_ATTEMPTS","2")),
+        pass_threshold=float(os.getenv("VAL_PASS_THRESHOLD","0.75")),
+        # ☆ 新增：总体复评的重规划上限（不填则在调度器内部按 env 读取）
+        overall_replan_max=int(os.getenv("OVERALL_REPLAN_MAX","1")),
     )
 
-    output = result.get("final_text", "")
+    output = result.get("final_text","")
 
     # 3) Memory：记录对话
     try:
@@ -277,50 +269,15 @@ async def generate_report(
     except Exception as e:
         append_step(result["trace_id"], "persist_memory", "error", {"error": str(e)})
 
-    # 是否启用流式：查询参数或 Accept 头
-    accept_header = (request.headers.get("accept") or "").lower()
-    use_stream = stream or ("text/event-stream" in accept_header)
-
-    if not use_stream:
-        # 传统JSON返回（保持兼容）
-        return {
-            "trace_id": result["trace_id"],
-            "session_id": session_id,
-            "rewritten_letter": output,
-            "done": result["done"],
-            "plan_rationale": result.get("plan_rationale", ""),
-            "steps": result.get("checklist", []),
-        }
-
-    # --- SSE 流式（最终文本分块回传）---
-    trace_id = result.get("trace_id", "")
-    done = bool(result.get("done", False))
-
-    async def event_stream():
-        # 1) meta 事件（可选）
-        meta = {
-            "trace_id": trace_id,
-            "session_id": session_id,
-            "done": False,
-            "note": "streaming final_text only",
-        }
-        yield f"event: meta\ndata: {json.dumps(meta, ensure_ascii=False)}\n\n"
-        await asyncio.sleep(0)
-
-        # 2) 按块发送最终文本
-        chunk_size = 32
-        text = output or ""
-        for i in range(0, len(text), chunk_size):
-            chunk = text[i:i+chunk_size]
-            payload = {"token": chunk}
-            yield f"event: token\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
-            await asyncio.sleep(0)  # 把控制权交回事件循环，提升前端接收流畅度
-
-        # 3) done 事件
-        tail = {"trace_id": trace_id, "done": done}
-        yield f"event: done\ndata: {json.dumps(tail, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    # 4) 返回（可在 /state/{trace_id} 查看完整 ToDo/步骤状态）
+    return {
+        "trace_id": result["trace_id"],
+        "session_id": session_id,
+        "rewritten_letter": output,
+        "done": result["done"],
+        "plan_rationale": result.get("plan_rationale",""),
+        "steps": result.get("checklist", []),
+    }
 
 @app.post("/debug")
 async def debug_report(
